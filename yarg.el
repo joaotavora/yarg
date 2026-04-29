@@ -19,99 +19,45 @@
 
 ;;; Commentary:
 
-;; A minimal Emacs interface to ripgrep (rg), built on compilation-mode.
+;; 50-loc minimal Emacs interface to ripgrep (rg), modelled after
+;; https://github.com/leoliu/ack-el.
 ;;
-;; Usage:
-;;   M-x yarg           Search symbol at point from project root immediately.
-;;   C-u M-x yarg       Same, but edit the rg command first.
-;;   C-u C-u M-x yarg   Choose a directory and edit the rg command.
+;; Say you bind C-c s to `yarg':
+;;   C-c s           Search symbol at point from project root immediately.
+;;   C-u C-c s       Same, but edit the suggested rg command first.
+;;   C-u C-u C-c s   Choose a directory and edit the rg command.
 ;;
-;; The only user option is `yarg-rg-switches'.
+;; The only user option is `yarg-switches'.
 
 ;;; Code:
 
 (require 'compile)
-(require 'ansi-color)
 (require 'thingatpt)
 (require 'project)
 
-(defgroup yarg nil
-  "Run ripgrep and display results."
-  :group 'tools
-  :group 'processes)
+(defgroup yarg nil "Run ripgrep and display results." :group 'tools)
 
-(defcustom yarg-rg-switches
-  "-n --no-heading --color always --smart-case --hidden --glob=!.git -M 1500"
-  "Switches passed to rg before the -e <pattern> argument.
-Removing -n, --no-heading and --color will break highlighting and/or
-error navigation."
-  :type 'string
-  :group 'yarg)
-
-;;; Compilation plumbing
-
-(defun yarg--filter ()
-  "Apply ANSI color sequences from rg output, tagging colored spans."
-  (save-excursion
-    (let ((ansi-color-apply-face-function
-           (lambda (beg end face)
-             (when face
-               (ansi-color-apply-overlay-face beg end face)
-               (put-text-property beg end 'yarg-color t)))))
-      (ansi-color-apply-on-region compilation-filter-start (point)))))
-
-(defun yarg--column-start ()
-  (or (let* ((beg (match-end 0))
-             (end (save-excursion (goto-char beg) (line-end-position)))
-             (mbeg (text-property-any beg end 'yarg-color t)))
-        (when mbeg (- mbeg beg)))
-      (when (match-string 4)
-        (1- (string-to-number (match-string 4))))))
-
-(defun yarg--column-end ()
-  (let* ((beg (match-end 0))
-         (end (save-excursion (goto-char beg) (line-end-position)))
-         (mbeg (text-property-any beg end 'yarg-color t))
-         (mend (and mbeg (next-single-property-change mbeg 'yarg-color nil end))))
-    (when mend (- mend beg))))
+(defcustom yarg-switches
+  "-S -. -g !.git -M 1500"
+  "Extra `rg' switches after mandatory ones and before -e <pattern>."
+  :type 'string)
 
 (defconst yarg-error-regexp-alist
-  ;; rg --no-heading produces: file:line:col:content
-  ;; The optional group 4 is the column number.
+  ;; rg --no-heading --column produces: file:line:col:content
+  ;; Group 4 is the column number (always present with --column).
   `(("^\\(.+?\\)\\(:\\)\\([1-9][0-9]*\\)\\2\
 \\(?:\\(?:\\(?4:[1-9][0-9]*\\)\\2\\)\\|[^0-9\n]\\|[0-9][^0-9\n]\\|\\.\\.\\.\\)"
-     1 3 (yarg--column-start . yarg--column-end) nil 1
-     (4 compilation-column-face nil t))
+     1 3 4 nil 1 (4 compilation-column-face nil t))
     ("^Binary file \\(.+\\) matches$" 1 nil nil 0 1))
-  "Compilation error-regexp-alist for rg --no-heading output.")
+  "Compilation error-regexp-alist for rg --no-heading --column output.")
 
 (define-compilation-mode yarg-mode "Yarg"
   "Compilation mode for ripgrep output."
   (setq-local compilation-disable-input t)
   (setq-local compilation-error-face 'compilation-info)
-  (add-hook 'compilation-filter-hook #'yarg--filter nil t))
-
-;;; Core logic
+  (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
 
 (defvar yarg-history nil "Minibuffer history for `yarg'.")
-
-(defun yarg--project-root ()
-  (if-let* ((proj (project-current))) (project-root proj) default-directory))
-
-(defun yarg--build-command (pattern)
-  (format "rg %s -e %s" yarg-rg-switches (shell-quote-argument pattern)))
-
-(defun yarg--read-command (initial-pattern directory)
-  (let* ((dir-name (file-name-nondirectory (directory-file-name directory)))
-         (prompt (format "Yarg [%s]: " dir-name))
-         (prefix (format "rg %s -e " yarg-rg-switches))
-         (init (if initial-pattern
-                   (concat prefix (shell-quote-argument initial-pattern))
-                 (concat prefix "''")))
-         ;; Place cursor at end when a pattern is pre-filled, between
-         ;; the quotes when starting empty.
-         (pos (if initial-pattern (length init) (1+ (length prefix)))))
-    (read-from-minibuffer prompt (cons init pos) nil nil 'yarg-history)))
 
 ;;;###autoload
 (defun yarg (arg)
@@ -128,14 +74,17 @@ is always treated as a literal string unless the user edits it."
   (interactive "P")
   (let* ((numeric (prefix-numeric-value arg))
          (symbol (thing-at-point 'symbol t))
-         (choose-dir (>= numeric 16))
-         (edit-p (or (>= numeric 4) (not symbol)))
-         (directory (if choose-dir
+         (proj (project-current))
+         (directory (if (>= numeric 16)
                         (read-directory-name "Search in: " nil nil t)
-                      (yarg--project-root)))
-         (command (if (and symbol (not edit-p))
-                      (yarg--build-command symbol)
-                    (yarg--read-command symbol directory))))
+                      (if proj (project-root proj) default-directory)))
+         (thing (if symbol (shell-quote-argument symbol) "''"))
+         (cmd (format "rg --column --color always --no-heading %s -e %s"
+                      yarg-switches thing))
+         (command (if (and symbol (< numeric 4)) cmd
+                    (read-from-minibuffer
+                     "Yarg: " (if symbol cmd (cons cmd (length cmd)))
+                     nil nil 'yarg-history))))
     (let ((default-directory (expand-file-name directory)))
       (compilation-start command 'yarg-mode))))
 
