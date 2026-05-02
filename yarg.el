@@ -32,6 +32,7 @@
 ;;; Code:
 
 (require 'compile)
+(require 'ansi-color)
 (require 'thingatpt)
 (require 'project)
 
@@ -42,12 +43,24 @@
   "Extra `rg' switches after mandatory ones and before -e <pattern>."
   :type 'string)
 
+(defun yarg--filter ()
+  (let ((ansi-color-apply-face-function
+         (lambda (b e f) (when f (ansi-color-apply-overlay-face b e f)
+                           (put-text-property b e 'yarg t)))))
+    (ansi-color-apply-on-region compilation-filter-start (point))))
+
+(defun yarg--col (endp)
+  (let* ((b (match-end 0)) (e (pos-eol b)) (m (text-property-any b e 'yarg t)))
+    (and m (- (if endp (next-single-property-change m 'yarg nil e) m) b))))
+
+(defun yarg--colbeg () (yarg--col nil)) (defun yarg--colend () (yarg--col t))
+
 (defconst yarg-error-regexp-alist
   ;; rg --no-heading --column produces: file:line:col:content
   ;; Group 4 is the column number (always present with --column).
   `(("^\\(.+?\\)\\(:\\)\\([1-9][0-9]*\\)\\2\
 \\(?:\\(?:\\(?4:[1-9][0-9]*\\)\\2\\)\\|[^0-9\n]\\|[0-9][^0-9\n]\\|\\.\\.\\.\\)"
-     1 3 4 nil 1 (4 compilation-column-face nil t))
+     1 3 (yarg--colbeg . yarg--colend) nil 1 (4 compilation-column-face nil t))
     ("^Binary file \\(.+\\) matches$" 1 nil nil 0 1))
   "Compilation error-regexp-alist for rg --no-heading --column output.")
 
@@ -55,7 +68,7 @@
   "Compilation mode for ripgrep output."
   (setq-local compilation-disable-input t)
   (setq-local compilation-error-face 'compilation-info)
-  (add-hook 'compilation-filter-hook #'ansi-color-compilation-filter nil t))
+  (add-hook 'compilation-filter-hook #'yarg--filter nil t))
 
 (defvar yarg-history nil "Minibuffer history for `yarg'.")
 
