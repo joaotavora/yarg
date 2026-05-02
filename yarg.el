@@ -91,12 +91,13 @@ is always treated as a literal string unless the user edits it."
          (directory (if (>= numeric 16)
                         (read-directory-name "Search in: " nil nil t)
                       (if proj (project-root proj) default-directory)))
-         (thing (if symbol (shell-quote-argument symbol) "''"))
+         (run-p (and symbol (< numeric 4)))
+         (thing (if run-p (shell-quote-argument symbol) "''"))
          (cmd (format "rg --column --color always --no-heading %s -e %s"
                       yarg-switches thing))
-         (command (if (and symbol (< numeric 4)) cmd
+         (command (if run-p cmd
                     (read-from-minibuffer
-                     "Yarg: " (if symbol cmd (cons cmd (length cmd)))
+                     "Yarg: " (cons cmd (length cmd))
                      nil nil 'yarg-history))))
     (let ((default-directory (expand-file-name directory)))
       (compilation-start command 'yarg-mode))))
