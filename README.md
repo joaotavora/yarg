@@ -7,6 +7,8 @@ great [ack-el](https://github.com/leoliu/ack-el) and `M-x grep`.
 No pompous conceptual overhead, just plain old boring Emacs
 compilation-mode integration goodness.
 
+![yarg in action](pic.png)
+
 ## Usage
 
 Bind `yarg` to a key, e.g. `(keymap-global-set "C-c s" #'yarg)`, then:
